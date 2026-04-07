@@ -31,21 +31,62 @@ class StructuredAnswer(BaseModel):
     is_relevant: bool = Field(description="True if the context contained enough information to answer the question, False otherwise.")
 
 # Initialize the parser
-structured_llm = llm.with_structured_output(StructuredAnswer)
+# structured_llm = llm.with_structured_output(StructuredAnswer, method="json_schema")
+parser = PydanticOutputParser(pydantic_object=StructuredAnswer)
 
 # A simple, robust RAG prompt
 PROMPT_TEMPLATE = """
-You are an expert AI assistant. Use the following proprietary context to answer the user's question.
-If the answer is not contained within the context, politely state that you do not have enough information. Do not hallucinate.
-If mathematical formulas appear broken or missing in the context, do your best to infer them, but wrap all mathematical notation in `$` for inline math and `$$` for block math so it renders cleanly in Markdown.
+You are an expert AI assistant operating in a **strict retrieval-augmented generation (RAG) environment**.
 
-Context:
+Your task is to answer the user's question using ONLY the provided context.
+
+----------------------------------------
+🧠 CORE RULES
+----------------------------------------
+
+1. **Context is the single source of truth**
+   - Do NOT use prior knowledge
+   - Do NOT guess or hallucinate
+   - If the answer is missing → explicitly say so
+
+3. **Mathematical Handling**
+   - If formulas are incomplete or slightly broken, intelligently reconstruct them
+   - Use `$...$` for inline math
+   - Use `$$...$$` for block equations
+
+
+----------------------------------------
+🔍 ANALYSIS PROCESS (INTERNAL)
+----------------------------------------
+
+- Identify relevant sections of the context
+- Extract key facts
+- Synthesize into a coherent answer
+- Do NOT include this reasoning in the final output
+
+----------------------------------------
+🧾 OUTPUT FORMAT (STRICT)
+----------------------------------------
+
+- You MUST follow the schema EXACTLY
+- Output ONLY valid JSON
+- Do NOT include any text outside the JSON
+- Do NOT wrap JSON in markdown/code blocks
+
+----------------------------------------
+📦 FORMAT INSTRUCTIONS
+----------------------------------------
+{format_instructions}
+
+----------------------------------------
+📚 CONTEXT
+----------------------------------------
 {context}
 
-Question:
+----------------------------------------
+❓ QUESTION
+----------------------------------------
 {question}
-
-Answer:
 """
 prompt = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
 
@@ -71,8 +112,8 @@ async def query_documents(query: str, tenant_id: str):
     context_text = "\n\n---\n\n".join([doc.page_content for doc in docs])
     
     # 3. Call Gemini
-    chain = prompt | structured_llm
-    response = chain.invoke({"context": context_text, "question": query})
+    chain = prompt | llm | parser
+    response = chain.invoke({"context": context_text, "question": query, "format_instructions": parser.get_format_instructions()})
     
     # 4. Format the sources for transparency
     sources = [
