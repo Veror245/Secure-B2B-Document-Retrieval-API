@@ -193,6 +193,8 @@ Question: {question}"""
         for doc in docs
     ]
     
+    
+    
     return {
         "answer_markdown": response.answer_markdown,
         "is_relevant": response.is_relevant,

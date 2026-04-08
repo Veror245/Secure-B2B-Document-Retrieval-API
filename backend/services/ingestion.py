@@ -119,7 +119,8 @@ async def process_and_store_document(file: UploadFile, tenant_id: str) -> int:
             ("#", "Header 1"),
             ("##", "Header 2"),
             ("###", "Header 3"),
-        ]
+        ] 
+        
         markdown_splitter = MarkdownHeaderTextSplitter(
             headers_to_split_on=headers_to_split_on,
             strip_headers=False # Keep the header in the text so the LLM can read it natively
