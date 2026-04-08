@@ -1,13 +1,27 @@
+import logging
+import os
+import pickle
+
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain_classic.retrievers import EnsembleRetriever
+from langchain_classic.retrievers.contextual_compression import ContextualCompressionRetriever
+from langchain_classic.retrievers.document_compressors.cross_encoder_rerank import CrossEncoderReranker
+from langchain_classic.retrievers.multi_query import MultiQueryRetriever
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Set up logging so you can actually SEE the rewritten queries in your terminal!
+logging.basicConfig()
+logging.getLogger("langchain_classic.retrievers.multi_query").setLevel(logging.INFO)
+
 
 # Re-initialize the same embeddings and vector store connection
 embeddings = HuggingFaceEmbeddings(
@@ -24,6 +38,11 @@ vector_store = Chroma(
 # llm = ChatGoogleGenerativeAI(model="gemma-3-12b-it", temperature=0.2)
 
 llm = ChatOllama(model="gemma4:31b-cloud", temperature=0.2)
+mqllm = ChatGoogleGenerativeAI(model="gemma-3-4b-it", temperature=0.6) 
+
+cross_encoder = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2",  model_kwargs={"local_files_only": True})
+hf_compressor = CrossEncoderReranker(model=cross_encoder, top_n=5) 
+
 
 # A simple, robust RAG prompt
 class StructuredAnswer(BaseModel):
@@ -90,16 +109,65 @@ Your task is to answer the user's question using ONLY the provided context.
 """
 prompt = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
 
+
+
 async def query_documents(query: str, tenant_id: str):
-    # 1. Retrieve relevant chunks (CRITICAL: Enforcing RBAC via Chroma metadata filtering)
-    retriever = vector_store.as_retriever(
-        search_kwargs={
-            "k": 4, # Fetch the top 4 most relevant chunks
-            "filter": {"tenant_id": tenant_id} # The user can ONLY search their own docs
-        }
+    
+    # STEP 1: Dense Retrieval (Vector Search)
+    chroma_retriever = vector_store.as_retriever(
+        search_kwargs={"k": 5, "filter": {"tenant_id": tenant_id}}
     )
     
-    docs = retriever.invoke(query)
+    # STEP 2: Sparse Retrieval (BM25 Keyword Search)
+    bm25_path = f"./data/bm25_{tenant_id}.pkl"
+    if os.path.exists(bm25_path):
+        with open(bm25_path, 'rb') as f:
+            bm25_retriever = pickle.load(f)
+        
+        # Ensure BM25 returns the same amount of chunks as Chroma
+        bm25_retriever.k = 5
+        
+        # STEP 3: LangChain's Ensemble Retriever 
+        # (This automatically handles Reciprocal Rank Fusion & Deduplication)
+        base_retriever = EnsembleRetriever(
+            retrievers=[chroma_retriever, bm25_retriever],
+            weights=[0.5, 0.5] # Weigh keyword and semantic search equally
+        )
+    else:
+        # Fallback if no BM25 index exists for this tenant yet
+        base_retriever = chroma_retriever
+    
+    
+    QUERY_PROMPT = PromptTemplate(
+        input_variables=["question"],
+        template="""Generate 5 diverse search queries for the given question.
+Each query must target a different perspective:
+- definition
+- cause
+- example
+- application
+- comparison
+
+Provide these alternative questions separated by newlines. Do not number them or include any conversational text.
+
+Question: {question}"""
+    )
+    
+    mq_retriever = MultiQueryRetriever.from_llm(
+        retriever=base_retriever,
+        llm=mqllm,
+        prompt=QUERY_PROMPT
+    )
+
+    # STEP 4: LangChain's Contextual Compression Retriever
+    # We pipe the Ensembled results into our direct HuggingFace Model!
+    compression_retriever = ContextualCompressionRetriever(
+        base_compressor=hf_compressor,
+        base_retriever=mq_retriever
+    )
+    
+    # Invoke the full pipeline (Dense+Sparse -> RRF -> Cross-Encoder)
+    docs = compression_retriever.invoke(query)
     
     if not docs:
         return {
@@ -108,14 +176,14 @@ async def query_documents(query: str, tenant_id: str):
             "sources": []
         }
 
-    # 2. Format the retrieved documents into a single context string
+    # Format the retrieved documents into a single context string
     context_text = "\n\n---\n\n".join([doc.page_content for doc in docs])
     
-    # 3. Call Gemini
+    # Generate the structured response
     chain = prompt | llm | parser
     response = chain.invoke({"context": context_text, "question": query, "format_instructions": parser.get_format_instructions()})
     
-    # 4. Format the sources for transparency
+    # Format the sources for transparency
     sources = [
         {
             "file": doc.metadata.get("source", "Unknown"),
@@ -126,7 +194,7 @@ async def query_documents(query: str, tenant_id: str):
     ]
     
     return {
-        "answer_markdown": response.answer_markdown, # type: ignore
-        "is_relevant": response.is_relevant, # type: ignore
+        "answer_markdown": response.answer_markdown,
+        "is_relevant": response.is_relevant,
         "sources": sources
     }
