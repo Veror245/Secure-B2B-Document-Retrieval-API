@@ -1,8 +1,13 @@
+import base64
+import io
 import re
 import os
 import tempfile
 from fastapi import UploadFile
+import fitz
 from langchain_community.document_loaders import TextLoader
+from langchain_core.messages import HumanMessage
+from langchain_ollama import ChatOllama
 from langchain_pymupdf4llm import PyMuPDF4LLMLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
@@ -17,6 +22,26 @@ vector_store = Chroma(
     persist_directory="./data/chroma", 
     embedding_function=embeddings
 )
+
+vision_llm = ChatOllama(model="glm-ocr", temperature=0)
+
+def perform_ollama_ocr(img_b64: str) -> str:
+    """Passes the base64 image directly to the local Ollama vision model."""
+    message = HumanMessage(
+        content=[
+            {
+                "type": "text", 
+                "text": "Text Recognition: Extract all text, tables, and mathematical formulas from this image. Format everything in clean Markdown. Wrap inline math in $ and block math in $$. Do not include any other conversational text."
+            },
+            {
+                "type": "image_url", 
+                "image_url": {"url": f"data:image/png;base64,{img_b64}"}
+            }
+        ]
+    )
+    
+    response = vision_llm.invoke([message])
+    return response.content # type: ignore
 
 def clean_text(text: str) -> str:
     """Basic text cleaning: remove null bytes, fix excessive whitespace and newlines."""
@@ -43,24 +68,28 @@ async def process_and_store_document(file: UploadFile, tenant_id: str) -> int:
             loader = PyMuPDF4LLMLoader(temp_file_path, mode="page")
             docs = loader.load()
             
+            pdf_document = fitz.open(temp_file_path)
+            
             for doc in docs:
                 # If PyMuPDF couldn't extract meaningful text, assume it's a scanned image
                 if len(doc.page_content.strip()) < 50:
                     page_num = doc.metadata.get("page", 0)
                     
-                    # pdf2image uses 1-based indexing for page numbers
-                    images = convert_from_path(
-                        temp_file_path, 
-                        first_page=page_num + 1, 
-                        last_page=page_num + 1
-                    )
+                    # NATIVE PYMUPDF RENDER (No Poppler required!)
+                    page = pdf_document.load_page(page_num)
+                    pix = page.get_pixmap(dpi=150)  # 150 DPI is a great sweet spot for OCR
                     
-                    if images:
-                        ocr_text = pytesseract.image_to_string(images[0])
-                        # Replace the empty/short content with OCR'd text
-                        doc.page_content = ocr_text + "\n"
-                        # Tag it so you know which pages used OCR (great for debugging!)
-                        doc.metadata["ocr_applied"] = True
+                    # Convert straight to base64
+                    img_bytes = pix.tobytes("png")
+                    img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+                    
+                    # Call our new local Ollama Vision OCR
+                    ocr_text = perform_ollama_ocr(img_b64)
+                    doc.page_content = ocr_text + "\n"
+                    doc.metadata["ocr_applied"] = "ollama-glm-ocr"
+            
+            # Clean up the fitz object
+            pdf_document.close()
                         
         elif file_extension == ".txt":
             loader = TextLoader(temp_file_path)
