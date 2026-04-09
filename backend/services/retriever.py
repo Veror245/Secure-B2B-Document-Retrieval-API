@@ -38,7 +38,7 @@ vector_store = Chroma(
 # llm = ChatGoogleGenerativeAI(model="gemma-3-12b-it", temperature=0.2)
 
 llm = ChatOllama(model="gemma4:31b-cloud", temperature=0.2)
-mqllm = ChatGoogleGenerativeAI(model="gemma-3-4b-it", temperature=0.6) 
+mqllm = ChatGoogleGenerativeAI(model="gemma-3-4b-it", temperature=0.2) 
 
 cross_encoder = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2",  model_kwargs={"local_files_only": True})
 hf_compressor = CrossEncoderReranker(model=cross_encoder, top_n=5) 
@@ -119,13 +119,11 @@ async def query_documents(query: str, tenant_id: str):
     )
     
     # STEP 2: Sparse Retrieval (BM25 Keyword Search)
-    bm25_path = f"./data/bm25_{tenant_id}.pkl"
+    bm25_path = f"./data/bm25/bm25_{tenant_id}.pkl"
     if os.path.exists(bm25_path):
         with open(bm25_path, 'rb') as f:
             bm25_retriever = pickle.load(f)
-        
-        # Ensure BM25 returns the same amount of chunks as Chroma
-        bm25_retriever.k = 5
+            bm25_retriever.k = 5
         
         # STEP 3: LangChain's Ensemble Retriever 
         # (This automatically handles Reciprocal Rank Fusion & Deduplication)
@@ -140,15 +138,11 @@ async def query_documents(query: str, tenant_id: str):
     
     QUERY_PROMPT = PromptTemplate(
         input_variables=["question"],
-        template="""Generate 5 diverse search queries for the given question.
-Each query must target a different perspective:
-- definition
-- cause
-- example
-- application
-- comparison
-
-Provide these alternative questions separated by newlines. Do not number them or include any conversational text.
+        template="""You are an AI language model assistant. Your task is to generate 3 
+different versions of the given user question to retrieve relevant documents from a vector database. 
+Focus on using different keywords, synonyms, or phrasing, but strictly maintain the original meaning. 
+Do not add external concepts, examples, or comparisons that were not in the original question.
+Provide these alternative questions separated by newlines. Do not number them or include conversational text.
 
 Question: {question}"""
     )
@@ -188,15 +182,17 @@ Question: {question}"""
         {
             "file": doc.metadata.get("source", "Unknown"),
             "page": doc.metadata.get("page", "N/A"),
-            "preview": doc.page_content[:150] + "..."
+            "preview": doc.page_content[:150] + "...",
+            "full_content": doc.page_content # Exposing full content for RAGAS evaluation
         }
         for doc in docs
     ]
     
-    
+    #deduplicate sources based on full_content to avoid showing the same document multiple times if retrieved by both retrievers
+    unique_sources = list({v['full_content']:v for v in sources}.values())
     
     return {
         "answer_markdown": response.answer_markdown,
         "is_relevant": response.is_relevant,
-        "sources": sources
+        "sources": unique_sources
     }

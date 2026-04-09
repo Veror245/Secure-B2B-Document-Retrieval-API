@@ -7,6 +7,8 @@ import tempfile
 from fastapi import UploadFile
 import fitz
 from pdf2image import convert_from_path
+from fastapi import UploadFile, BackgroundTasks
+import asyncio
 
 from langchain_community.retrievers import BM25Retriever
 from langchain_community.document_loaders import TextLoader
@@ -37,8 +39,8 @@ def custom_word_tokenizer(text: str) -> list[str]:
     """Word-level tokenization using NLTK to enhance BM25Plus retrieval."""
     return word_tokenize(text.lower())
 
-def perform_ollama_ocr(img_b64: str) -> str:
-    """Passes the base64 image directly to the local Ollama vision model."""
+async def perform_ollama_ocr_async(img_b64: str) -> str:
+    """Passes the base64 image to the local Ollama vision model Asynchronously."""
     message = HumanMessage(
         content=[
             {
@@ -51,8 +53,8 @@ def perform_ollama_ocr(img_b64: str) -> str:
             }
         ]
     )
-    
-    response = vision_llm.invoke([message])
+    # Use ainvoke instead of invoke for non-blocking execution
+    response = await vision_llm.ainvoke([message])
     return response.content # type: ignore
 
 def clean_text(text: str) -> str:
@@ -62,85 +64,114 @@ def clean_text(text: str) -> str:
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
-async def process_and_store_document(file: UploadFile, tenant_id: str) -> int:
+def rebuild_bm25_index_background(tenant_id: str):
+    """Runs silently in the background after the API has already responded to the user."""
+    print(f"Background Task Started: Rebuilding BM25 for Tenant {tenant_id}...")
+    try:
+        results = vector_store.get(where={"tenant_id": tenant_id})
+        
+        all_tenant_docs = [
+            Document(page_content=txt, metadata=meta) 
+            for txt, meta in zip(results['documents'], results['metadatas'])
+        ]
+        
+        if all_tenant_docs:
+            bm25_retriever = BM25Retriever.from_documents(
+                all_tenant_docs,
+                preprocess_func=custom_word_tokenizer
+            )
+            
+            bm25_dir = "./data/bm25"
+            os.makedirs(bm25_dir, exist_ok=True)
+            
+            # --- THE FIX: Atomic Writes ---
+            temp_bm25_path = os.path.join(bm25_dir, f"temp_bm25_{tenant_id}.pkl")
+            final_bm25_path = os.path.join(bm25_dir, f"bm25_{tenant_id}.pkl")
+            
+            # 1. Write to a temporary file first so we don't break active queries
+            with open(temp_bm25_path, 'wb') as f:
+                pickle.dump(bm25_retriever, f)
+                
+            # 2. Instantly swap the temp file to the real filename (Atomic Operation)
+            os.replace(temp_bm25_path, final_bm25_path)
+            
+        print(f"Background Task Complete: BM25 Updated for Tenant {tenant_id}!")
+    except Exception as e:
+        print(f"Background Task Error: Failed to rebuild BM25: {e}")
+
+async def process_and_store_document(file: UploadFile, tenant_id: str, background_tasks: BackgroundTasks) -> int:
     """
     Parses the uploaded file, cleans the text, chunks it, and saves it to ChromaDB.
-    Returns the number of chunks created.
+    Triggers BM25 rebuild as a background task.
     """
     file_extension = os.path.splitext(file.filename)[1].lower() # type: ignore
     
-    # LangChain loaders expect physical file paths, so we use a temp file for the UploadFile stream
     temp_fd, temp_file_path = tempfile.mkstemp(suffix=file_extension)
     with os.fdopen(temp_fd, 'wb') as f:
         f.write(await file.read())
         
     try:
-        # 1. Load documents using LangChain Wrappers
         if file_extension == ".pdf":
             loader = PyMuPDF4LLMLoader(temp_file_path, mode="page")
             docs = loader.load()
             
             pdf_document = fitz.open(temp_file_path)
             
+            # --- OPTIMIZATION 3: Collect OCR Tasks for Async Batching ---
+            ocr_tasks_data = []
             for doc in docs:
-                # If PyMuPDF couldn't extract meaningful text, assume it's a scanned image
                 if len(doc.page_content.strip()) < 50:
                     page_num = doc.metadata.get("page", 0)
-                    
-                    # NATIVE PYMUPDF RENDER (No Poppler required!)
                     page = pdf_document.load_page(page_num)
-                    pix = page.get_pixmap(dpi=150)  # 150 DPI is a great sweet spot for OCR
-                    
-                    # Convert straight to base64
+                    pix = page.get_pixmap(dpi=150)  
                     img_bytes = pix.tobytes("png")
                     img_b64 = base64.b64encode(img_bytes).decode('utf-8')
-                    
-                    # Call our new local Ollama Vision OCR
-                    ocr_text = perform_ollama_ocr(img_b64)
-                    doc.page_content = ocr_text + "\n"
-                    doc.metadata["ocr_applied"] = "ollama-glm-ocr"
+                    ocr_tasks_data.append((doc, img_b64))
             
-            # Clean up the fitz object
             pdf_document.close()
-                        
+
+            # --- OPTIMIZATION 4: Run OCR Concurrently with a Semaphore ---
+            if ocr_tasks_data:
+                # Adjust this number based on your GPU/RAM. 
+                # 4 means it will process 4 scanned pages simultaneously!
+                semaphore = asyncio.Semaphore(4) 
+
+                async def process_ocr_page(doc_obj, b64_str):
+                    async with semaphore:
+                        ocr_text = await perform_ollama_ocr_async(b64_str)
+                        doc_obj.page_content = ocr_text + "\n"
+                        doc_obj.metadata["ocr_applied"] = "ollama-glm-ocr"
+
+                # Await all the concurrent batch tasks
+                await asyncio.gather(*(process_ocr_page(d, b) for d, b in ocr_tasks_data))
+
         elif file_extension == ".txt":
             loader = TextLoader(temp_file_path)
             docs = loader.load()
         else:
             raise ValueError("Unsupported file type. Please upload a .pdf or .txt file.")
             
-        # 2. Clean text and inject RBAC metadata
         for doc in docs:
-            doc.page_content = clean_text(doc.page_content)
-            doc.metadata["source"] = file.filename  # Override temp file path with real name
+            if 'clean_text' in globals():
+                doc.page_content = clean_text(doc.page_content)
+            doc.metadata["source"] = file.filename
             doc.metadata["tenant_id"] = tenant_id
-            
-        headers_to_split_on = [
-            ("#", "Header 1"),
-            ("##", "Header 2"),
-            ("###", "Header 3"),
-        ] 
-        
+
+        # --- Stage 3: Two-Stage Chunking Strategy ---
+        headers_to_split_on = [("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")]
         markdown_splitter = MarkdownHeaderTextSplitter(
-            headers_to_split_on=headers_to_split_on,
-            strip_headers=False # Keep the header in the text so the LLM can read it natively
+            headers_to_split_on=headers_to_split_on, strip_headers=False 
         )
         
         md_header_splits = []
         for doc in docs:
-            # This splits the text and automatically creates new Document objects
             splits = markdown_splitter.split_text(doc.page_content)
-            
-            # Re-attach our base metadata (tenant_id, source) to these new splits
             for split in splits:
                 split.metadata.update(doc.metadata)
             md_header_splits.extend(splits)
 
-
         recursive_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=2000,
-            chunk_overlap=400,
-            separators=[
+            chunk_size=2000, chunk_overlap=400, separators=[
         "\n\n",
         "\n",
         " ",
@@ -154,42 +185,21 @@ async def process_and_store_document(file: UploadFile, tenant_id: str) -> int:
         "",
     ],
         )
-        
-        # split_documents preserves the rich metadata extracted by PyMuPDFLoader
         chunks = recursive_splitter.split_documents(md_header_splits)
         
-        # 4. Save to ChromaDB
         if chunks:
-            vector_store.add_documents(chunks) # Ensure vector_store is globally available here
+            # OPTIMIZATION 5: Asynchronous Vector Store Insert
+            await vector_store.aadd_documents(chunks) 
             
-            # --- NEW: Build and Save Tenant-Specific BM25 Index ---
-            # Fetch all documents for this tenant from the vector store
-            results = vector_store.get(where={"tenant_id": tenant_id})
+            # --- Fire off the Background Task! ---
+            # The API will not wait for this function to finish before responding to the user.
+            background_tasks.add_task(rebuild_bm25_index_background, tenant_id)
             
-            # Reconstruct LangChain Document objects from Chroma's dictionary output
-            all_tenant_docs = [
-                Document(page_content=txt, metadata=meta) 
-                for txt, meta in zip(results['documents'], results['metadatas'])
-            ]
-            
-            if all_tenant_docs:
-                # Build the BM25 sparse keyword index using NLTK and the built-in BM25Plus variant
-                bm25_retriever = BM25Retriever.from_documents(
-                    all_tenant_docs,
-                    preprocess_func=custom_word_tokenizer
-                )
-                
-                # Save it to disk in our persistent data folder
-                bm25_path = f"./data/bm25_{tenant_id}.pkl"
-                with open(bm25_path, 'wb') as f:
-                    pickle.dump(bm25_retriever, f)
-                
         return len(chunks)
         
     finally:
-        # Always clean up the temporary file
         if os.path.exists(temp_file_path):
             try:
                 os.remove(temp_file_path)
             except PermissionError:
-                print(f"Warning: Windows locked {temp_file_path}. It will be cleaned up by the OS later.")
+                pass

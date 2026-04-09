@@ -16,6 +16,7 @@ class Source(BaseModel):
     file: str
     page: int | str
     preview: str
+    full_content: str
 
 class QueryResponse(BaseModel):
     answer_markdown: str

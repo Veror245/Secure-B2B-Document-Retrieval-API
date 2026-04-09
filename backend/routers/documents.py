@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from backend.services.ingestion import process_and_store_document
+from fastapi import BackgroundTasks
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -13,7 +14,7 @@ async def upload_document(
     Requires a tenant_id to isolate the data.
     """
     try:
-        num_chunks = await process_and_store_document(file, tenant_id)
+        num_chunks = await process_and_store_document(file, tenant_id, background_tasks=BackgroundTasks())
         return {
             "status": "success",
             "message": f"Successfully ingested {file.filename}",
