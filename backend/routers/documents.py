@@ -6,6 +6,7 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 
 @router.post("/upload")
 async def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     tenant_id: str = Form(...)  # Using Form since UploadFile requires multipart/form-data
 ):
@@ -14,7 +15,7 @@ async def upload_document(
     Requires a tenant_id to isolate the data.
     """
     try:
-        num_chunks = await process_and_store_document(file, tenant_id, background_tasks=BackgroundTasks())
+        num_chunks = await process_and_store_document(file, tenant_id, background_tasks)
         return {
             "status": "success",
             "message": f"Successfully ingested {file.filename}",

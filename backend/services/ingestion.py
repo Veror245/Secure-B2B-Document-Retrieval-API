@@ -4,6 +4,7 @@ import pickle
 import re
 import os
 import tempfile
+import traceback
 from fastapi import UploadFile
 import fitz
 from pdf2image import convert_from_path
@@ -67,6 +68,13 @@ def clean_text(text: str) -> str:
 def rebuild_bm25_index_background(tenant_id: str):
     """Runs silently in the background after the API has already responded to the user."""
     print(f"Background Task Started: Rebuilding BM25 for Tenant {tenant_id}...")
+    
+    bm25_dir = "./data/bm25"
+    os.makedirs(bm25_dir, exist_ok=True)
+    
+    # 2. CREATE A HARD LOG FILE (To catch silent crashes)
+    log_file = os.path.join(bm25_dir, f"bg_debug_{tenant_id}.log")
+    
     try:
         results = vector_store.get(where={"tenant_id": tenant_id})
         
@@ -76,6 +84,9 @@ def rebuild_bm25_index_background(tenant_id: str):
         ]
         
         if all_tenant_docs:
+            with open(log_file, "a") as f:
+                f.write("3. Building BM25 Index (If this is the last line, rank_bm25 is missing)\n")
+            
             bm25_retriever = BM25Retriever.from_documents(
                 all_tenant_docs,
                 preprocess_func=custom_word_tokenizer
@@ -95,9 +106,17 @@ def rebuild_bm25_index_background(tenant_id: str):
             # 2. Instantly swap the temp file to the real filename (Atomic Operation)
             os.replace(temp_bm25_path, final_bm25_path)
             
-        print(f"Background Task Complete: BM25 Updated for Tenant {tenant_id}!")
+        with open(log_file, "a") as f:
+                f.write("4. SUCCESS: BM25 pkl file saved and ready for queries!\n")
+                
+        print(f"Background Task Complete: BM25 Updated for Tenant {tenant_id}!", flush=True)
+        
     except Exception as e:
-        print(f"Background Task Error: Failed to rebuild BM25: {e}")
+        # CAPTURE THE EXACT ERROR TRACEBACK
+        error_trace = traceback.format_exc()
+        print(f"CRITICAL BG ERROR: {error_trace}", flush=True)
+        with open(log_file, "a") as f:
+            f.write(f"\nCRASHED WITH ERROR:\n{error_trace}\n")
 
 async def process_and_store_document(file: UploadFile, tenant_id: str, background_tasks: BackgroundTasks) -> int:
     """
@@ -189,7 +208,7 @@ async def process_and_store_document(file: UploadFile, tenant_id: str, backgroun
         
         if chunks:
             # OPTIMIZATION 5: Asynchronous Vector Store Insert
-            await vector_store.aadd_documents(chunks) 
+            vector_store.add_documents(chunks)  # type: ignore
             
             # --- Fire off the Background Task! ---
             # The API will not wait for this function to finish before responding to the user.
