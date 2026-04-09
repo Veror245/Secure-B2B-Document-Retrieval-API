@@ -146,7 +146,7 @@ async def process_and_store_document(file: UploadFile, tenant_id: str, backgroun
                 await asyncio.gather(*(process_ocr_page(d, b) for d, b in ocr_tasks_data))
 
         elif file_extension == ".txt":
-            loader = TextLoader(temp_file_path)
+            loader = TextLoader(temp_file_path, encoding="utf-8")
             docs = loader.load()
         else:
             raise ValueError("Unsupported file type. Please upload a .pdf or .txt file.")

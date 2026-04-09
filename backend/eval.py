@@ -12,50 +12,45 @@ from langchain_huggingface import HuggingFaceEmbeddings
 
 # --- Configuration ---
 API_BASE_URL = "http://127.0.0.1:8000"
-TEST_TENANT_ID = "biomed_tenant"
+TEST_TENANT_ID = "general_benchmark_tenant"
 
 def run_end_to_end_test():
-    print("1. Loading Medical Research Dataset (COVID-QA)...")
-    # This dataset contains parsed PDF research papers (extremely noisy text, no tables)
-    dataset = load_dataset("pubmed_qa", "pqa_labeled", split="train")
+    print("1. Loading General Knowledge Dataset (SQuAD)...")
+    # SQuAD uses Wikipedia articles. Perfect for baseline general knowledge testing.
+    dataset = load_dataset("squad", split="validation")
     
     # We will test 25 specific questions
     test_cases = dataset.select(range(25))
     
-    print("\n2. Building the Medical Haystack...")
-    # Because multiple questions can come from the same paper, we want to extract
-    # UNIQUE papers to build a massive, noisy corpus.
+    print("\n2. Building the Wikipedia Haystack...")
     unique_contexts = set()
     
-    # Get papers for our test questions
+    # Get articles for our test questions
     for row in test_cases:
-        # PubMed QA stores contexts as a list of strings inside a dictionary
-        ctx = "\n".join(row['context']['contexts']) # type: ignore
-        unique_contexts.add(ctx) # type: ignore
+        unique_contexts.add(row['context']) # type: ignore
         
-    # Inject 50 MORE random medical papers as pure distractors
-    for row in dataset.select(range(25, 400)):
-        ctx = "\n".join(row['context']['contexts']) # type: ignore
-        unique_contexts.add(ctx)
-        if len(unique_contexts) >= 50:
+    # Inject 100 MORE random Wikipedia articles as pure distractors
+    for row in dataset.select(range(25, len(dataset))):
+        unique_contexts.add(row['context']) # type: ignore
+        if len(unique_contexts) >= 1000:
             break
             
-    corpus_text = "# Biomedical Research Knowledge Base\n\n"
+    corpus_text = "# General Knowledge Base (Wikipedia)\n\n"
     for ctx in unique_contexts:
-        # This text is extremely noisy. Parsed from PDFs with random newlines and citations.
+        # Standard, well-formatted English text
         corpus_text += f"{ctx}\n\n====================\n\n"
         
     os.makedirs("./data", exist_ok=True)
-    corpus_path = "./data/medical_corpus.txt"
+    corpus_path = "./data/general_corpus.txt"
     with open(corpus_path, "w", encoding="utf-8") as f:
         f.write(corpus_text)
         
-    print(f"Created {corpus_path} ({os.path.getsize(corpus_path) / 1024 / 1024:.2f} MB of dense medical text)")
+    print(f"Created {corpus_path} ({os.path.getsize(corpus_path) / 1024 / 1024:.2f} MB of Wikipedia text)")
     
     # --- STEP 2: INGEST VIA YOUR FASTAPI ENDPOINT ---
-    print("\n3. Uploading noisy corpus to your FastAPI ingestion endpoint...")
+    print("\n3. Uploading Wikipedia corpus to your FastAPI ingestion endpoint...")
     with open(corpus_path, "rb") as f:
-        files = {"file": ("medical_corpus.txt", f, "text/plain")}
+        files = {"file": ("general_corpus.txt", f, "text/plain")}
         data = {"tenant_id": TEST_TENANT_ID}
         
         response = requests.post(f"{API_BASE_URL}/documents/upload", files=files, data=data)
@@ -98,8 +93,8 @@ def run_end_to_end_test():
             retrieved_chunks = [source["full_content"] for source in api_data["sources"]]
             data_for_ragas["contexts"].append(retrieved_chunks)
             
-            # PubMed QA format stores the actual detailed answer here
-            ground_truth = row["long_answer"] # type: ignore
+            # SQuAD stores answers in a nested dictionary
+            ground_truth = row["answers"]["text"][0] # type: ignore
             data_for_ragas["ground_truth"].append(ground_truth)
         else:
             print(f"Query failed: {res.text}")
@@ -129,8 +124,8 @@ def run_end_to_end_test():
     # Save results
     os.makedirs("./data/evals", exist_ok=True)
     df = result.to_pandas() # type: ignore
-    df.to_csv("./data/evals/biomed_benchmark.csv", index=False)
-    print("\nSaved detailed report to ./data/evals/biomed_benchmark.csv")
-
+    df.to_csv("./data/evals/general_benchmark.csv", index=False)
+    print("\nSaved detailed report to ./data/evals/general_benchmark.csv")
+    
 if __name__ == "__main__":
     run_end_to_end_test()
