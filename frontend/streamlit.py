@@ -85,11 +85,11 @@ if st.button("Ask"):
                     if not data.get("is_relevant", True):
                         st.warning("⚠️ The retrieved context may not be fully relevant.")
 
-                    sources = data.get("sources", [])
-                    if sources:
-                        st.markdown("## 📚 Sources")
-                        for src in sources:
-                            st.markdown(f"- {src}")
+                    # sources = data.get("sources", [])
+                    # if sources:
+                    #     st.markdown("## 📚 Sources")
+                    #     for src in sources:
+                    #         st.markdown(f"- {src}")
 
                 else:
                     st.error(f"Error: {response.text}")

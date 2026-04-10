@@ -1,8 +1,12 @@
 from fastapi import FastAPI
 from backend.routers import documents
 from backend.routers import query
+from backend.services.database import engine, Base
 
-app = FastAPI()
+app = FastAPI(title="Secure B2B Document Retrieval API")
+
+Base.metadata.create_all(bind=engine)
+
 app.include_router(documents.router)
 app.include_router(query.router)
 

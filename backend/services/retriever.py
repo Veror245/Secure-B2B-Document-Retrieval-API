@@ -3,6 +3,7 @@ import os
 import pickle
 
 from langchain_chroma import Chroma
+from langchain_core.exceptions import OutputParserException
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain_classic.retrievers import EnsembleRetriever
@@ -173,26 +174,56 @@ Question: {question}"""
     # Format the retrieved documents into a single context string
     context_text = "\n\n---\n\n".join([doc.page_content for doc in docs])
     
-    # Generate the structured response
-    chain = prompt | llm | parser
-    response = chain.invoke({"context": context_text, "question": query, "format_instructions": parser.get_format_instructions()})
+    MAX_RETRIES = 3
     
-    # Format the sources for transparency
-    sources = [
+    for attempt in range(MAX_RETRIES):
+        try:
+            print(f"[API] Generation Attempt {attempt + 1}/{MAX_RETRIES}...")
+            
+            # Invoke the strict LLM
+            chain = prompt | llm | parser
+            response = chain.invoke({"context": context_text, "question": query, "format_instructions": parser.get_format_instructions()})
+            
+            # If we get here, parsing was 100% successful! 
+            # Convert the Pydantic object to a standard dictionary to return to the user
+            sources = [
         {
             "file": doc.metadata.get("source", "Unknown"),
             "page": doc.metadata.get("page", "N/A"),
             "preview": doc.page_content[:150] + "...",
             "full_content": doc.page_content # Exposing full content for RAGAS evaluation
         }
-        for doc in docs
-    ]
+            for doc in docs
+        ]
     
     #deduplicate sources based on full_content to avoid showing the same document multiple times if retrieved by both retrievers
-    unique_sources = list({v['full_content']:v for v in sources}.values())
-    
+            unique_sources = list({v['full_content']:v for v in sources}.values())
+            
+            return {
+                "answer_markdown": response.answer_markdown,
+                "is_relevant": response.is_relevant,
+                "sources": unique_sources
+            }
+            
+        except OutputParserException as e:
+            print(f"[WARNING] Output Parsing Failed on attempt {attempt + 1}: {e}")
+            # The loop will automatically continue to the next attempt
+            
+        except Exception as e:
+            # Catch rate limits or API outages
+            print(f"[ERROR] Critical LLM failure on attempt {attempt + 1}: {e}")
+            
+    # --- 4. The Ultimate Fallback ---
+    # If it fails 3 times, we return a graceful degradation instead of a 500 API Crash
+    print(f"[FAIL] All {MAX_RETRIES} attempts failed. Returning graceful fallback.")
     return {
-        "answer_markdown": response.answer_markdown,
-        "is_relevant": response.is_relevant,
-        "sources": unique_sources
+        "answer_markdown": "I apologize, but I encountered an internal formatting error while generating your answer. Please try asking your question again.",
+        "is_relevant": False,
+        "sources": []
     }
+    
+    # Generate the structured response
+    
+    
+    # Format the sources for transparency
+    
