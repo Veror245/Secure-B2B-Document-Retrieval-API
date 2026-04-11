@@ -206,3 +206,7 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 data/
+
+ngrok.exe
+ngrok.yml
+.ngrok.exe.old
