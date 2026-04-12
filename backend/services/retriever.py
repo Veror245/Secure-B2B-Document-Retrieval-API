@@ -38,7 +38,7 @@ vector_store = Chroma(
 # Initialize the LLM (Requires GOOGLE_API_KEY environment variable)
 # llm = ChatGoogleGenerativeAI(model="gemma-3-12b-it", temperature=0.2)
 
-llm = ChatOllama(model="gemma4:31b-cloud", temperature=0.2)
+llm = ChatOllama(model="gemma4:31b-cloud", temperature=0.2, base_url="https://api.ollama.com")
 mqllm = ChatGoogleGenerativeAI(model="gemma-3-4b-it", temperature=0.2) 
 
 cross_encoder = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2",  model_kwargs={"local_files_only": False})
