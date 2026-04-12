@@ -1,5 +1,5 @@
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
@@ -8,6 +8,7 @@ from backend.services.database import SessionLocal
 from backend.services.models import User
 from backend.services.authutil import get_password_hash, verify_password, create_access_token
 from backend.services.authutil import get_db
+from backend.services.limiter import limiter
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -16,7 +17,8 @@ class UserCreate(BaseModel):
     password: str
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
-def register_user(user: UserCreate, db: Session = Depends(get_db)):
+@limiter.limit("3/minute") # Rate limit to prevent abuse of the registration endpoint
+def register_user(request: Request, user: UserCreate, db: Session = Depends(get_db)):
     # Check if user exists
     db_user = db.query(User).filter(User.email == user.email).first()
     if db_user:
@@ -34,7 +36,8 @@ def register_user(user: UserCreate, db: Session = Depends(get_db)):
     return {"message": "User created successfully", "user_id": new_user.id}
 
 @router.post("/login")
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+@limiter.limit("5/minute") # Rate limit to prevent abuse of the login endpoint
+def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     # Authenticate user
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password): # type: ignore

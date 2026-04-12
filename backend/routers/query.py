@@ -1,10 +1,11 @@
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from backend.services.retriever import query_documents
 from backend.services.authutil import get_current_user
 from backend.services.models import User
+from backend.services.limiter import limiter
 
 router = APIRouter(prefix="/query", tags=["Query"])
 
@@ -26,8 +27,10 @@ class QueryResponse(BaseModel):
 
 
 @router.post("/", response_model=QueryResponse)
+@limiter.limit("5/minute") # Rate limit to prevent abuse of the query endpoint
 async def query_endpoint(
-    request: QueryRequest, 
+    request: Request,
+    query_req: QueryRequest, 
     current_user: User = Depends(get_current_user) # Securely extracts the user from the JWT
 ):
     """
@@ -35,7 +38,7 @@ async def query_endpoint(
     """
     try:
         # Pass the secure current_user.id directly into the retrieval engine
-        result = await query_documents(request.query, current_user.id) # type: ignore
+        result = await query_documents(query_req.query, current_user.id) # type: ignore
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
