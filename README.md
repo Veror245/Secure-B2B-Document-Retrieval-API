@@ -146,7 +146,7 @@ This platform ensures:
 #### 1️⃣ Clone the repo
 
 ```bash
-git clone https://github.com/yourusername/b2b-secure-rag.git
+git clone [https://github.com/yourusername/b2b-secure-rag.git](https://github.com/Veror245/Secure-B2B-Document-Retrieval-API)
 cd b2b-secure-rag
 ```
 
