@@ -13,8 +13,6 @@ RUN pip install --no-cache-dir uv
 
 # 4. Copy your dependency files first (for caching)
 COPY pyproject.toml uv.lock ./
-# If you have a uv.lock file, uncomment the line below:
-# COPY uv.lock ./
 
 # 5. Install the dependencies using uv
 # --system tells uv to install globally inside the container (no need for a venv in Docker)
