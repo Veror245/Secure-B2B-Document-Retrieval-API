@@ -27,7 +27,7 @@ logging.getLogger("langchain_classic.retrievers.multi_query").setLevel(logging.I
 # Re-initialize the same embeddings and vector store connection
 embeddings = HuggingFaceEmbeddings(
     model_name="BAAI/bge-small-en-v1.5",
-    model_kwargs={"local_files_only": True}
+    model_kwargs={"local_files_only": False}
 )
 
 vector_store = Chroma(
@@ -41,7 +41,7 @@ vector_store = Chroma(
 llm = ChatOllama(model="gemma4:31b-cloud", temperature=0.2)
 mqllm = ChatGoogleGenerativeAI(model="gemma-3-4b-it", temperature=0.2) 
 
-cross_encoder = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2",  model_kwargs={"local_files_only": True})
+cross_encoder = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2",  model_kwargs={"local_files_only": False})
 hf_compressor = CrossEncoderReranker(model=cross_encoder, top_n=5) 
 
 

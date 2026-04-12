@@ -1,0 +1,50 @@
+name: b2b-rag-platform
+
+services:
+  api:
+    container_name: rag-backend
+    build: 
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env 
+    environment:
+      - DATABASE_URL=sqlite:////app/data/app.db
+    depends_on:
+      # Ensures Ollama starts before your API tries to connect to it
+      - ollama
+
+  frontend:
+    container_name: rag-frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      # Reverted back to the old Docker-internal URL
+      - API_URL=http://rag-backend:8000
+    depends_on:
+      - api
+
+  ollama:
+    container_name: rag-ollama
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      # Named volume so the massive model files aren't deleted if the container restarts
+      - ollama_data:/root/.ollama
+    env_file:
+    - .env 
+    # Overrides the default startup behavior to auto-pull your model
+    # Note: Change 'llama3' to whatever model you are using (e.g., 'mistral', 'phi3')
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama serve & sleep 5 && ollama pull glm-ocr:latest && ollama pull gemma4:31b-cloud && wait"]
+
+volumes:
+  ollama_data:

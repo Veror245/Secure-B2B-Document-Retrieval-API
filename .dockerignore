@@ -1,0 +1,7 @@
+.venv
+pycache
+*.pyc
+.git
+.env
+data/chroma
+data/bm25

@@ -3,7 +3,7 @@ import requests
 import time
 
 # --- Configuration ---
-API_URL = "http://127.0.0.1:8000"
+API_URL = "http://rag-backend:8000"
 
 # --- Styling (Modern & Sleek) ---
 st.set_page_config(page_title="Secure B2B RAG", page_icon="🔒", layout="wide")

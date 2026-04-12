@@ -27,14 +27,14 @@ from nltk.tokenize import word_tokenize
 nltk.download("punkt_tab", quiet=True)
 
 embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5",
-                                   model_kwargs={"local_files_only": True})
+                                   model_kwargs={"local_files_only": False})
 
 vector_store = Chroma(
     persist_directory="./data/chroma", 
     embedding_function=embeddings
 )
 
-vision_llm = ChatOllama(model="glm-ocr", temperature=0)
+vision_llm = ChatOllama(model="glm-ocr", temperature=0, base_url="http://rag-ollama:11434")
 
 def custom_word_tokenizer(text: str) -> list[str]:
     """Word-level tokenization using NLTK to enhance BM25Plus retrieval."""
