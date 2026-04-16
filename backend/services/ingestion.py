@@ -34,7 +34,9 @@ vector_store = Chroma(
     embedding_function=embeddings
 )
 
-vision_llm = ChatOllama(model="glm-ocr", temperature=0, base_url="http://rag-ollama:11434")
+vision_llm = ChatOllama(model="glm-ocr", temperature=0, 
+                        #base_url="http://rag-ollama:11434"
+                        )
 
 def custom_word_tokenizer(text: str) -> list[str]:
     """Word-level tokenization using NLTK to enhance BM25Plus retrieval."""
