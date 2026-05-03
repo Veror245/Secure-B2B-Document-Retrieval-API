@@ -193,7 +193,7 @@ This system was evaluated using the **RAGAS framework** on the **SQuAD dataset**
 ## 🤝 Future Roadmap (v2.0)
 
 * 🗄️ PostgreSQL migration (replace SQLite)
-* 📊 PostgreSQL + pgvector integration
+* 📊 Pgvector integration (replace Chroma)
 * ⚡ Semantic caching (reduce LLM calls)
 * 🌐 Agentic web search fallback
 * 🧠 Smarter multi-agent orchestration
