@@ -6,7 +6,7 @@ An **enterprise-grade, multi-tenant Retrieval-Augmented Generation (RAG) platfor
 ## 🚀 The Problem It Solves
 
 When companies deploy LLMs internally, the biggest risk is:
-
+  
 > ❌ **Data Leakage** — User A retrieving User B’s proprietary data
 
 ### ✅ Solution
@@ -193,6 +193,7 @@ This system was evaluated using the **RAGAS framework** on the **SQuAD dataset**
 ## 🤝 Future Roadmap (v2.0)
 
 * 🗄️ PostgreSQL migration (replace SQLite)
+* 📊 PostgreSQL + pgvector integration
 * ⚡ Semantic caching (reduce LLM calls)
 * 🌐 Agentic web search fallback
 * 🧠 Smarter multi-agent orchestration
